@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import torch.functional as F
-from model import clones
+from .model import clones
 
 def attention(query, key, value, mask, dropout):
     '''
@@ -42,52 +42,34 @@ class MultiHeadedAttention(nn.Module):
         '''
         # dropout的值怎么设置
         super(MultiHeadedAttention, self).__init__()
+        assert d_model // h # d_k=512//8
+        self.d_k = d_model // h
+        self.h = 8
+        self.linears = clones(nn.Linear(d_model, d_model), 4) # 4个Linears, Weights大小为（512， 512）
 
+        self.attn = None
+        self.dropout = nn.Dropout(p=dropout)
 
-#     assert d_model % h == 0 # We assume d_v always equals d_k 512%8=0
-#     self.d_k = d_model // h # d_k=512//8=64
-#     self.h = h #8
-#     self.linears = clones(nn.Linear(d_model, d_model), 4) 
-#     #定义四个Linear networks, 每个的大小是(512, 512)的，
-#     #每个Linear network里面有两类可训练参数，Weights，
-#     #其大小为512*512，以及biases，其大小为512=d_model。
-
-#     self.attn = None 
-#     self.dropout = nn.Dropout(p=dropout)
-#   def forward(self, query, key, value, mask=None): 
-#    # 注意，输入query的形状类似于(30, 10, 512)，
-#    # key.size() ~ (30, 11, 512), 
-#    #以及value.size() ~ (30, 11, 512)
-    
-#     if mask is not None: # Same mask applied to all h heads. 
-#       mask = mask.unsqueeze(1) # mask下回细细分解。
-#     nbatches = query.size(0) #e.g., nbatches=30
-#     # 1) Do all the linear projections in batch from 
-#     #d_model => h x d_k 
-#     query, key, value = [l(x).view(nbatches, -1, self.h, self.d_k)
-#       .transpose(1, 2) for l, x in 
-#       zip(self.linears, (query, key, value))] 
-#       # 这里是前三个Linear Networks的具体应用，
-#       #例如query=(30,10, 512) -> Linear network -> (30, 10, 512) 
-#       #-> view -> (30,10, 8, 64) -> transpose(1,2) -> (30, 8, 10, 64)
-#       #，其他的key和value也是类似地，
-#       #从(30, 11, 512) -> (30, 8, 11, 64)。
-#     # 2) Apply attention on all the projected vectors in batch. 
-#     x, self.attn = attention(query, key, value, mask=mask, 
-#       dropout=self.dropout) 
-#       #调用上面定义好的attention函数，输出的x形状为(30, 8, 10, 64)；
-#       #attn的形状为(30, 8, 10=target.seq.len, 11=src.seq.len)
-#     # 3) "Concat" using a view and apply a final linear. 
-#     x = x.transpose(1, 2).contiguous().
-#       view(nbatches, -1, self.h * self.d_k) 
-#       # x ~ (30, 8, 10, 64) -> transpose(1,2) -> 
-#       #(30, 10, 8, 64) -> contiguous() and view -> 
-#       #(30, 10, 8*64) = (30, 10, 512)
-# return self.linears[-1](x) 
-# #执行第四个Linear network，把(30, 10, 512)经过一次linear network，
-# #得到(30, 10, 512).
-
-
+    def forward(self, query, key, value, mask=None):
+        # 这里设置 q, k, v :(128, 11, 512) (128, 11, 512) (128 , 11, 512)
+        if mask is not None:
+            mask = mask.unsqueeze(1)
+        nbatches = query.size(0) # batch size
+        # 这里切分的意义？
+        query, key, value = [l(x).view(nbatches, -1, self.h, self.d_k)
+            for l, x in zip(self.linears, (query, key, value))]
+        # 分解512维度的词向量依据attention头切分，
+        # 并1，2维交换，将次数量交换到后，（128， 8， 10， 128）
+        x, self.attn = attention(query, key, value,
+                                 mask=mask, dropout=self.dropout) # 获取attention
+        # (128, 8, 10, 128) 变回 （128， 10 ， 512）
+        x = (x.transpose(1, 2).contiguous() # 将x Tensor连续化，开辟新的内存，依照x行的顺序展开存储底层数据
+             .view(nbatches, -1, self.h*self.d_k) # view需要连续化的数据
+             )
+        del query
+        del key
+        del value
+        return self.linears[-1](x)
 
 
 
